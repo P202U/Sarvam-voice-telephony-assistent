@@ -91,7 +91,7 @@ class TransferFunctions(llm.ToolContext):
         self.phone_number = phone_number
 
     @llm.function_tool(description="Look up user details by phone number.")
-    def lookup_user(self, phone: str):
+    async def lookup_user(self, phone: str):
         """Look up user details.
 
         Args:
@@ -263,13 +263,13 @@ async def entrypoint(ctx: agents.JobContext):
             ctx.shutdown()
     else:
         logger.info("Detecting if we should greet...")
-        await session.generate_reply(instructions=config.fallback_greeting)
+        await session.generate_reply(instructions=config.FALLBACK_GREETING)
 
 
 if __name__ == "__main__":
     agents.cli.run_app(
         agents.WorkerOptions(
             entrypoint_fnc=entrypoint,
-            agent_name="outbound-caller",
+            agent_name="outcall",
         )
     )
