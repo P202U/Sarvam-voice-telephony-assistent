@@ -1,10 +1,12 @@
 import os
+import sys
 import certifi
 
 os.environ["SSL_CERT_FILE"] = certifi.where()
 
 import argparse
 import asyncio
+
 from dotenv import load_dotenv
 from livekit import api
 from livekit.protocol.sip import (
@@ -17,156 +19,204 @@ from livekit.protocol.sip import (
 load_dotenv(".env")
 
 
-def get_livekit_api():
+def get_livekit_api() -> api.LiveKitAPI:
+    """Build a LiveKit API client, exiting cleanly if credentials are missing."""
     url = os.getenv("LIVEKIT_URL")
     key = os.getenv("LIVEKIT_API_KEY")
     secret = os.getenv("LIVEKIT_API_SECRET")
 
-    if not (url and key and secret):
-        raise RuntimeError(
-            "Missing LiveKit credentials (LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET) in .env"
-        )
+    missing = [
+        k
+        for k, v in {
+            "LIVEKIT_URL": url,
+            "LIVEKIT_API_KEY": key,
+            "LIVEKIT_API_SECRET": secret,
+        }.items()
+        if not v
+    ]
+    if missing:
+        print(f"❌  Missing env vars: {', '.join(missing)}")
+        print("    Set them in your .env file and try again.")
+        sys.exit(1)
+
     return api.LiveKitAPI(url=url, api_key=key, api_secret=secret)
 
 
-async def handle_create(args):
-    sip_address = args.domain or os.getenv("VOBIZ_SIP_DOMAIN")
+# Subcommand handlers
+
+
+async def handle_create(args) -> None:
+    """Create a new outbound SIP trunk."""
+    domain = args.domain or os.getenv("VOBIZ_SIP_DOMAIN")
     username = args.username or os.getenv("VOBIZ_USERNAME")
     password = args.password or os.getenv("VOBIZ_PASSWORD")
     number = args.number or os.getenv("VOBIZ_OUTBOUND_NUMBER")
 
-    if not (sip_address and username and password):
-        print(
-            "Error: Missing required SIP configuration fields. Provide flags or update your .env file."
-        )
+    missing = [
+        k
+        for k, v in {
+            "--domain / VOBIZ_SIP_DOMAIN": domain,
+            "--username / VOBIZ_USERNAME": username,
+            "--password / VOBIZ_PASSWORD": password,
+        }.items()
+        if not v
+    ]
+    if missing:
+        print(f"===> Missing required fields: {', '.join(missing)}")
         return
 
+    if not number:
+        print("=!=> No outbound number supplied — trunk will have no caller ID.")
+
     lkapi = get_livekit_api()
     try:
-        print(f"Creating SIP Outbound Trunk for {sip_address}...")
-        trunk_info = SIPOutboundTrunkInfo(
-            name="Vobiz Trunk",
-            address=sip_address,
-            auth_username=username,
-            auth_password=password,
-            numbers=[number] if number else [],
+        print(f"Creating SIP trunk for {domain}…")
+        trunk = await lkapi.sip.create_outbound_trunk(
+            CreateSIPOutboundTrunkRequest(
+                trunk=SIPOutboundTrunkInfo(
+                    name="Vobiz Trunk",
+                    address=domain,
+                    auth_username=username,
+                    auth_password=password,
+                    numbers=[number] if number else [],
+                )
+            )
         )
-        request = CreateSIPOutboundTrunkRequest(trunk=trunk_info)
-        trunk = await lkapi.sip.create_outbound_trunk(request)
-
-        print("\n SIP Trunk Created Successfully!")
-        print(f"Trunk ID: {trunk.sip_trunk_id}")
-        print(f"Name: {trunk.name}")
-        print(f"Numbers: {trunk.numbers}")
-    except Exception as e:
-        print(f"\n Error creating trunk: {e}")
+        print(f"\n===> SIP trunk created.")
+        print(f"    Trunk ID  :  {trunk.sip_trunk_id}")
+        print(f"    Name      :  {trunk.name}")
+        print(f"    Numbers   :  {trunk.numbers}")
+        print(f"\n    Add this to your .env:")
+        print(f"    SIP_TRUNK_ID={trunk.sip_trunk_id}\n")
+    except Exception as exc:
+        print(f"\n=!=>  Failed to create trunk: {exc}")
     finally:
         await lkapi.aclose()
 
 
-async def handle_list(args):
+async def handle_list(args) -> None:
+    """List all inbound and outbound SIP trunks."""
     lkapi = get_livekit_api()
     try:
-        print("Fetching Outbound SIP Trunks...")
-        response_out = await lkapi.sip.list_outbound_trunk(
-            ListSIPOutboundTrunkRequest()
-        )
-        trunks_out = response_out.items
-        print(f"\nFound {len(trunks_out)} Outbound SIP Trunks:")
-        for t in trunks_out:
-            print(f"  ID: {t.sip_trunk_id}")
-            print(f"  Name: {t.name}")
-            print(f"  Numbers: {t.numbers}")
-            print("-" * 30)
+        resp_out = await lkapi.sip.list_outbound_trunk(ListSIPOutboundTrunkRequest())
+        print(f"\nOutbound trunks ({len(resp_out.items)} found):")
+        for t in resp_out.items:
+            print(f"  ID      : {t.sip_trunk_id}")
+            print(f"  Name    : {t.name}")
+            print(f"  Numbers : {t.numbers}")
+            print("  " + "─" * 36)
 
-        print("\nFetching Inbound SIP Trunks...")
-        response_in = await lkapi.sip.list_inbound_trunk(ListSIPInboundTrunkRequest())
-        trunks_in = response_in.items
-        print(f"\nFound {len(trunks_in)} Inbound SIP Trunks:")
-        for t in trunks_in:
-            print(f"  ID: {t.sip_trunk_id}")
-            print(f"  Name: {t.name}")
-            print(f"  Numbers: {t.numbers}")
-            print("-" * 30)
-    except Exception as e:
-        print(f"\n Error listing trunks: {e}")
+        resp_in = await lkapi.sip.list_inbound_trunk(ListSIPInboundTrunkRequest())
+        print(f"\nInbound trunks ({len(resp_in.items)} found):")
+        for t in resp_in.items:
+            print(f"  ID      : {t.sip_trunk_id}")
+            print(f"  Name    : {t.name}")
+            print(f"  Numbers : {t.numbers}")
+            print("  " + "─" * 36)
+        print()
+    except Exception as exc:
+        print(f"\n=!=>  Error listing trunks: {exc}")
     finally:
         await lkapi.aclose()
 
 
-async def handle_update(args):
-    trunk_id = args.trunk_id or os.getenv("OUTBOUND_TRUNK_ID")
-    sip_address = args.domain or os.getenv("VOBIZ_SIP_DOMAIN")
+async def handle_update(args) -> None:
+    """Update credentials on an existing trunk without recreating it."""
+    trunk_id = (
+        args.trunk_id or os.getenv("SIP_TRUNK_ID") or os.getenv("OUTBOUND_TRUNK_ID")
+    )
+    domain = args.domain or os.getenv("VOBIZ_SIP_DOMAIN")
     username = args.username or os.getenv("VOBIZ_USERNAME")
     password = args.password or os.getenv("VOBIZ_PASSWORD")
     number = args.number or os.getenv("VOBIZ_OUTBOUND_NUMBER")
 
     if not trunk_id:
-        print(
-            "Error: Trunk ID missing. Specify --trunk-id or set OUTBOUND_TRUNK_ID in your .env file."
-        )
+        print("=!=>  No trunk ID. Pass --trunk-id or set SIP_TRUNK_ID in .env.")
         return
-    if not (sip_address and username and password):
-        print("Error: Missing credentials parameters for updating fields.")
+
+    missing = [
+        k
+        for k, v in {
+            "--domain / VOBIZ_SIP_DOMAIN": domain,
+            "--username / VOBIZ_USERNAME": username,
+            "--password / VOBIZ_PASSWORD": password,
+        }.items()
+        if not v
+    ]
+    if missing:
+        print(f"=!=>  Missing required fields: {', '.join(missing)}")
         return
 
     lkapi = get_livekit_api()
     try:
-        print(f"Updating fields on SIP Trunk: {trunk_id}")
-        print(f"  Address: {sip_address}")
-        print(f"  Username: {username}")
-        print(f"  Numbers: [{number if number else ''}]")
+        print(f"Updating trunk {trunk_id}…")
+        print(f"  Domain   : {domain}")
+        print(f"  Username : {username}")
+        print(f"  Numbers  : [{number or ''}]")
 
         await lkapi.sip.update_outbound_trunk_fields(
             trunk_id,
-            address=sip_address,
+            address=domain,
             auth_username=username,
             auth_password=password,
             numbers=[number] if number else [],
         )
-        print("\n SIP Trunk fields updated successfully!")
-    except Exception as e:
-        print(f"\n Failed to update trunk: {e}")
+        print("\n===>  Trunk updated successfully.\n")
+    except Exception as exc:
+        print(f"\n=!=>  Failed to update trunk: {exc}")
     finally:
         await lkapi.aclose()
 
 
-def main():
+# Argument parser
+
+
+def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Unified LiveKit SIP Trunk Management Utility Tool."
+        description="LiveKit SIP trunk management utility.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+            commands:
+            create   Register a new outbound SIP trunk with LiveKit
+            list     List all outbound and inbound trunks
+            update   Update credentials on an existing trunk
+
+            All flags fall back to .env values if not supplied.
+                    """,
     )
+
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    # Create trunk parser
-    parser_create = subparsers.add_parser(
-        "create", help="Create a new SIP Outbound trunk."
-    )
-    parser_create.add_argument("--domain", help="SIP Server Domain Address")
-    parser_create.add_argument("--username", help="SIP Auth Username")
-    parser_create.add_argument("--password", help="SIP Auth Password")
-    parser_create.add_argument("--number", help="Outbound number attached to trunk")
+    # create
+    p_create = subparsers.add_parser("create", help="Create a new outbound SIP trunk.")
+    p_create.add_argument("--domain", help="SIP server domain (e.g. sip.vobiz.com)")
+    p_create.add_argument("--username", help="SIP auth username")
+    p_create.add_argument("--password", help="SIP auth password")
+    p_create.add_argument("--number", help="Outbound caller ID number (E.164)")
 
-    # List trunks parser
-    subparsers.add_parser("list", help="List all incoming and outgoing SIP trunks.")
+    # list
+    subparsers.add_parser("list", help="List all inbound and outbound SIP trunks.")
 
-    # Update trunk fields parser
-    parser_update = subparsers.add_parser(
-        "update", help="Update configurations for an existing trunk ID."
+    # update
+    p_update = subparsers.add_parser(
+        "update", help="Update an existing trunk's credentials."
     )
-    parser_update.add_argument("--trunk-id", help="Target Outbound Trunk ID")
-    parser_update.add_argument("--domain", help="SIP Server Domain Address")
-    parser_update.add_argument("--username", help="SIP Auth Username")
-    parser_update.add_argument("--password", help="SIP Auth Password")
-    parser_update.add_argument("--number", help="Outbound number attached to trunk")
+    p_update.add_argument(
+        "--trunk-id", help="Target trunk ID (overrides SIP_TRUNK_ID in .env)"
+    )
+    p_update.add_argument("--domain", help="SIP server domain")
+    p_update.add_argument("--username", help="SIP auth username")
+    p_update.add_argument("--password", help="SIP auth password")
+    p_update.add_argument("--number", help="Outbound caller ID number (E.164)")
 
     args = parser.parse_args()
 
-    if args.command == "create":
-        asyncio.run(handle_create(args))
-    elif args.command == "list":
-        asyncio.run(handle_list(args))
-    elif args.command == "update":
-        asyncio.run(handle_update(args))
+    handlers = {
+        "create": handle_create,
+        "list": handle_list,
+        "update": handle_update,
+    }
+    asyncio.run(handlers[args.command](args))
 
 
 if __name__ == "__main__":
